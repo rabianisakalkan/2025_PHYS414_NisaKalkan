@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.interpolate import CubicSpline  # cubic splines (no linear interp)
+from scipy.interpolate import CubicSpline  
 
 # ============================================================
 # Constants (CGS)
@@ -304,3 +304,21 @@ plt.title("Full M-R curve and maximum mass (Chandrasekhar mass)")
 plt.grid(True)
 plt.legend()
 plt.show()
+
+
+# Computing theoretical Chandrasekhar mass from n=3 polytrope 
+
+# Lane-Emden constants for n = 3 
+xi1_3, thetaP_3 = lane_emden_constants(3.0)          # thetaP_3 = theta'(xi1)
+A3 = - (xi1_3**2) * thetaP_3                         # dimensionless constant
+K_rel = 2.0 * C_th * (D_th**(-4.0/3.0))
+MCh_theory = 4.0*np.pi * A3 * (((3.0 + 1.0) * K_rel) / (4.0*np.pi*G))**(3.0/2.0)
+
+print("\n=== Chandrasekhar mass from n=3 polytrope ===")
+print("Lane-Emden (n=3): xi1 =", xi1_3, "  theta'(xi1) =", thetaP_3, "  A3=-xi1^2 theta' =", A3)
+print("K_rel =", K_rel)
+print("MCh_theory =", MCh_theory / M_sun, "M_sun")
+
+print("\n=== Comparison to numerical MCh ===")
+print("MCh_numerical (best-fit EOS) =", MCh / M_sun, "M_sun")
+print("ratio (best-fit / theory)   =", (MCh / MCh_theory))
