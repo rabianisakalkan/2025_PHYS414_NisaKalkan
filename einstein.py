@@ -33,6 +33,14 @@ def si_mass_density_to_code(rho_SI: float) -> float:
     rho_geom = (G_SI / c_SI**2) * rho_SI
     return rho_geom * (L0**2)
 
+def code_density_to_si(rho_code: float) -> float:
+    """
+    Invert si_mass_density_to_code:
+      rho_code = (G/c^2) * rho_SI * L0^2
+      -> rho_SI = rho_code * (c^2/G) / L0^2
+    """
+    return rho_code * (c_SI**2 / G_SI) / (L0**2)
+
 rho_r_ref_code = si_mass_density_to_code(rho_r_ref_SI)
 p_ref_code = si_mass_density_to_code(P_over_c2_ref_SI)
 
@@ -53,7 +61,7 @@ def eos_from_p(p: float, K: float, Gamma: float):
     return rho, rho_r
 
 # ============================
-# TOV + baryonic mass RHS 
+# TOV + baryonic mass RHS (Part a + Part b)
 # State y = [m, nu, p, mP]
 # ============================
 def tov_rhs_with_mp(r: float, y: np.ndarray, K: float, Gamma: float) -> np.ndarray:
@@ -78,6 +86,7 @@ def tov_rhs_with_mp(r: float, y: np.ndarray, K: float, Gamma: float) -> np.ndarr
     if one_minus_2m_over_r <= 0.0:
         return np.array([0.0, 0.0, 0.0, 0.0])
 
+    # baryonic mass equation uses rho_r (rest-mass density)
     dmp = 4.0 * np.pi * (one_minus_2m_over_r ** (-0.5)) * (r**2) * rho_r
 
     return np.array([dm, dnu, dp, dmp])
@@ -91,8 +100,7 @@ def rk4_step(f, r, y, h, K, Gamma):
 
 # ============================
 # Integrate one star given central pressure p_c (code units)
-# Initial conditions: m(0)=0, p(0)=p_c, nu(0)=0, mP(0)=0
-# Stop at p=0.
+# Returns central total density rho_c (SI) for Part (c)
 # ============================
 def integrate_star_pc(
     p_c: float,
@@ -102,21 +110,20 @@ def integrate_star_pc(
     h_max: float = 5e-3,
 ):
     """
-    Returns (M_solar, R_km, MP_solar, Delta, status)
-    status in {"ok","horizon","nan","no_surface"}.
+    Returns:
+      (M_solar, R_km, MP_solar, Delta, rho_c_SI, status)
     """
     K = K_from_reference(Gamma)
 
     if not np.isfinite(p_c) or p_c <= 0.0:
-        return (np.nan, np.nan, np.nan, np.nan, "nan")
+        return (np.nan, np.nan, np.nan, np.nan, np.nan, "nan")
 
-    # start slightly away from r=0
+    rho_c_code, rho_r_c_code = eos_from_p(p_c, K, Gamma)
+    rho_c_SI = code_density_to_si(rho_c_code)
+
     r = 1e-6
-    rho_c, rho_r_c = eos_from_p(p_c, K, Gamma)
-
-    # small-r series starts
-    m0 = (4.0/3.0) * np.pi * rho_c * r**3
-    mP0 = (4.0/3.0) * np.pi * rho_r_c * r**3
+    m0 = (4.0/3.0) * np.pi * rho_c_code * r**3
+    mP0 = (4.0/3.0) * np.pi * rho_r_c_code * r**3
     nu0 = 0.0
 
     y = np.array([m0, nu0, p_c, mP0], dtype=float)
@@ -130,12 +137,11 @@ def integrate_star_pc(
 
         m, nu, p, mP = y
         if not (np.isfinite(m) and np.isfinite(p) and np.isfinite(nu) and np.isfinite(mP)):
-            return (np.nan, np.nan, np.nan, np.nan, "nan")
+            return (np.nan, np.nan, np.nan, np.nan, rho_c_SI, "nan")
 
         if (r - 2.0*m) <= 0.0:
-            return (np.nan, np.nan, np.nan, np.nan, "horizon")
+            return (np.nan, np.nan, np.nan, np.nan, rho_c_SI, "horizon")
 
-        # variable step: small near center, capped outside
         h = 0.02 * r
         h = min(h, h_max)
         h = max(h, h_min)
@@ -144,16 +150,16 @@ def integrate_star_pc(
         r += h
 
         if not (np.isfinite(y[0]) and np.isfinite(y[2]) and np.isfinite(y[3])):
-            return (np.nan, np.nan, np.nan, np.nan, "nan")
+            return (np.nan, np.nan, np.nan, np.nan, rho_c_SI, "nan")
         if (r - 2.0*y[0]) <= 0.0:
-            return (np.nan, np.nan, np.nan, np.nan, "horizon")
+            return (np.nan, np.nan, np.nan, np.nan, rho_c_SI, "horizon")
 
     if y[2] > 0.0:
-        return (np.nan, np.nan, np.nan, np.nan, "no_surface")
+        return (np.nan, np.nan, np.nan, np.nan, rho_c_SI, "no_surface")
 
-    # interpolate to surface p=0 using last two steps
+    # interpolate to surface p=0
     p1 = prev_y[2]
-    p2 = y[2]  # <= 0
+    p2 = y[2]
     if p1 <= 0.0:
         r_surf = prev_r
         m_surf = prev_y[0]
@@ -169,15 +175,15 @@ def integrate_star_pc(
     R_km = (r_surf * L0) / 1000.0
 
     if not (np.isfinite(M_solar) and M_solar > 0 and np.isfinite(MP_solar)):
-        return (np.nan, np.nan, np.nan, np.nan, "nan")
+        return (np.nan, np.nan, np.nan, np.nan, rho_c_SI, "nan")
 
     Delta = (MP_solar - M_solar) / M_solar
-    return (M_solar, R_km, MP_solar, Delta, "ok")
+    return (M_solar, R_km, MP_solar, Delta, rho_c_SI, "ok")
 
 # ============================
-# Choose a p_c sweep range using rho_r factors around the reference rho_r_ref_code
+# p_c sweep grid
 # ============================
-def pc_sweep_grid(Gamma: float, n_points: int = 90, rho_factor_min: float = 1e-2, rho_factor_max: float = 1e6):
+def pc_sweep_grid(Gamma: float, n_points: int = 120, rho_factor_min: float = 1e-2, rho_factor_max: float = 1e6):
     K = K_from_reference(Gamma)
     rho_r_min = rho_r_ref_code * rho_factor_min
     rho_r_max = rho_r_ref_code * rho_factor_max
@@ -185,24 +191,23 @@ def pc_sweep_grid(Gamma: float, n_points: int = 90, rho_factor_min: float = 1e-2
     p_max = K * (rho_r_max ** Gamma)
     return np.logspace(np.log10(p_min), np.log10(p_max), n_points)
 
-def sweep_models_for_gamma(Gamma: float, n_points: int = 90):
-    """
-    One sweep per Gamma. Reuse outputs for all plots.
-    """
+def sweep_models_for_gamma(Gamma: float, n_points: int = 120):
     pc_grid = pc_sweep_grid(Gamma, n_points=n_points)
 
     R = np.full(n_points, np.nan)
     M = np.full(n_points, np.nan)
     MP = np.full(n_points, np.nan)
     Delta = np.full(n_points, np.nan)
+    rho_c_SI = np.full(n_points, np.nan)
     status = np.array([""] * n_points, dtype=object)
 
     for i, pc in enumerate(pc_grid):
-        Mi, Ri, MPi, Di, si = integrate_star_pc(pc, Gamma)
+        Mi, Ri, MPi, Di, rhoi, si = integrate_star_pc(pc, Gamma)
         M[i] = Mi
         R[i] = Ri
         MP[i] = MPi
         Delta[i] = Di
+        rho_c_SI[i] = rhoi
         status[i] = si
 
     return {
@@ -212,18 +217,41 @@ def sweep_models_for_gamma(Gamma: float, n_points: int = 90):
         "M": M,
         "MP": MP,
         "Delta": Delta,
+        "rho_c_SI": rho_c_SI,
         "status": status
     }
+
+def split_stable_unstable_by_Mmax(res: dict):
+    good = (res["status"] == "ok") & np.isfinite(res["M"]) & np.isfinite(res["rho_c_SI"]) & (res["rho_c_SI"] > 0)
+    idx = np.where(good)[0]
+    if idx.size < 3:
+        stable = np.zeros_like(good, dtype=bool)
+        unstable = np.zeros_like(good, dtype=bool)
+        return good, stable, unstable, None
+
+    i_local_max = np.nanargmax(res["M"][idx])
+    i_max = idx[i_local_max]
+
+    stable = np.zeros_like(good, dtype=bool)
+    unstable = np.zeros_like(good, dtype=bool)
+
+    stable[idx[idx <= i_max]] = True
+    unstable[idx[idx > i_max]] = True
+    return good, stable, unstable, i_max
+
+def masked(arr, mask):
+    out = np.array(arr, dtype=float)
+    out[~mask] = np.nan
+    return out
 
 
 # ============================
 def main():
     gammas = [1.3569, 2.7138]
 
-    # --- Run one sweep per Gamma and store results ---
     results = []
     for Gamma in gammas:
-        results.append(sweep_models_for_gamma(Gamma, n_points=90))
+        results.append(sweep_models_for_gamma(Gamma, n_points=120))
 
     # ----------------------------
     # Part (a): M-R curves
@@ -277,6 +305,43 @@ def main():
 
     fig_b2.suptitle("Gravitational Mass vs Baryonic Mass")
     fig_b2.tight_layout()
+    plt.show()
+
+    # ----------------------------
+    # Part (c): M vs rho_c (log x-axis)
+    # ----------------------------
+    fig_c, axes_c = plt.subplots(1, 2, figsize=(12, 5), sharex=False, sharey=False)
+
+    for ax, res in zip(axes_c, results):
+        good, stable, unstable, i_max = split_stable_unstable_by_Mmax(res)
+
+        ax.set_xscale("log")
+
+        # no markers
+        ax.plot(masked(res["rho_c_SI"], stable), masked(res["M"], stable),
+                linestyle="-", color="black", label="Stable")
+        ax.plot(masked(res["rho_c_SI"], unstable), masked(res["M"], unstable),
+                linestyle="--", color="black", label="Unstable")
+
+        ax.set_xlabel(r"$\rho_c$ (kg/m$^3$)")
+        ax.set_ylabel(r"$M$ ($M_\odot$)")
+        ax.set_title(f"$\Gamma$ = {res['Gamma']}")
+        ax.legend()
+
+        # Major grid only 
+        ax.grid(True, which="major")
+        ax.grid(False, which="minor")
+
+        if i_max is not None and np.isfinite(res["M"][i_max]):
+            print(
+                f"Gamma={res['Gamma']}: "
+                f"M_max = {res['M'][i_max]:.6g} M_sun at "
+                f"R = {res['R_km'][i_max]:.6g} km, "
+                f"rho_c = {res['rho_c_SI'][i_max]:.6g} kg/m^3"
+            )
+
+    fig_c.suptitle(r"Stability from $dM/d\rho_c$ and the Maximum Mass")
+    fig_c.tight_layout()
     plt.show()
 
 
