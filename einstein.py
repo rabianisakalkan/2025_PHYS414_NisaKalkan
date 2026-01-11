@@ -92,7 +92,7 @@ def tov_rhs_with_mp(r: float, y: np.ndarray, K: float, Gamma: float) -> np.ndarr
     if one_minus_2m_over_r <= 0.0:
         return np.array([0.0, 0.0, 0.0, 0.0])
 
-    # baryonic mass equation uses rho_r (rest-mass density)
+    # baryonic mass equation uses rho_r 
     dmp = 4.0 * np.pi * (one_minus_2m_over_r ** (-0.5)) * (r**2) * rho_r
 
     return np.array([dm, dnu, dp, dmp])
@@ -374,24 +374,33 @@ def main():
     # ----------------------------
     fig_c, axes_c = plt.subplots(1, 2, figsize=(12, 5), sharex=False, sharey=False)
     for ax, res in zip(axes_c, results):
-        good, stable, unstable, _ = split_stable_unstable_by_Mmax(res)
+        good, stable, unstable, i_max = split_stable_unstable_by_Mmax(res)
+
         ax.set_xscale("log")
+
         ax.plot(masked(res["rho_c_SI"], stable), masked(res["M"], stable),
                 linestyle="-", color="black", label="Stable")
         ax.plot(masked(res["rho_c_SI"], unstable), masked(res["M"], unstable),
                 linestyle="--", color="black", label="Unstable")
+
         ax.set_xlabel(r"$\rho_c$ (kg/m$^3$)")
         ax.set_ylabel(r"$M$ ($M_\odot$)")
         ax.set_title(f"$\\Gamma$ = {res['Gamma']}")
         ax.legend()
+
         ax.grid(True, which="major")
         ax.grid(False, which="minor")
+
+        # ---- ADDED BACK: print Mmax like before (ONLY change requested) ----
+        if i_max is not None and np.isfinite(res["M"][i_max]):
+            print(f"Gamma={res['Gamma']}: M_max = {res['M'][i_max]:.6g} M_sun")
+
     fig_c.suptitle(r"Stability from $dM/d\rho_c$ and the Maximum Mass")
     fig_c.tight_layout()
     plt.show()
 
     # ===== Part (d): Mmax(K) and allowed K range =====
-    M_req = 2.5  
+    M_req = 2.5
     fig_d, axes_d = plt.subplots(1, 2, figsize=(12, 5), sharex=False, sharey=False)
 
     for ax, Gamma in zip(axes_d, gammas):
@@ -419,11 +428,9 @@ def main():
         ax.axhline(M_req, linestyle="--", color="black", linewidth=1.0, label=rf"${M_req}\,M_\odot$")
 
         if kmin is not None:
-            # Mark Kmin and shade allowed region within scanned range
             ax.axvline(kmin, linestyle="--", color="black", linewidth=1.0)
             ax.axvspan(kmin, K_factors.max(), alpha=0.12)
 
-            # Print a clean statement
             print(f"Gamma={Gamma}: Allowed K/K_ref >= {kmin:.6g} (from M_max >= {M_req} M_sun)")
         else:
             print(f"Gamma={Gamma}: No K in scanned range satisfies M_max >= {M_req} M_sun (expand K range).")
