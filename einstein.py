@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from typing import Optional, Tuple
 
 
 # Physical constants (SI)
@@ -24,6 +25,7 @@ G_CM3_TO_KG_M3 = 1000.0        # 1 g/cm^3 = 1000 kg/m^3
 rho_r_ref_SI = rho_r_ref_cgs_g_cm3 * G_CM3_TO_KG_M3
 P_over_c2_ref_SI = (P_over_c2_ref_cgs_dyn_cm2 * DYN_PER_CM2_TO_PA) / (c_SI**2)  # kg/m^3
 
+
 def si_mass_density_to_code(rho_SI: float) -> float:
     """
     Convert SI mass density (kg/m^3) into dimensionless code units.
@@ -33,6 +35,7 @@ def si_mass_density_to_code(rho_SI: float) -> float:
     rho_geom = (G_SI / c_SI**2) * rho_SI
     return rho_geom * (L0**2)
 
+
 def code_density_to_si(rho_code: float) -> float:
     """
     Invert si_mass_density_to_code:
@@ -40,6 +43,7 @@ def code_density_to_si(rho_code: float) -> float:
       -> rho_SI = rho_code * (c^2/G) / L0^2
     """
     return rho_code * (c_SI**2 / G_SI) / (L0**2)
+
 
 rho_r_ref_code = si_mass_density_to_code(rho_r_ref_SI)
 p_ref_code = si_mass_density_to_code(P_over_c2_ref_SI)
@@ -52,6 +56,7 @@ p_ref_code = si_mass_density_to_code(P_over_c2_ref_SI)
 def K_from_reference(Gamma: float) -> float:
     return p_ref_code / (rho_r_ref_code ** Gamma)
 
+
 def eos_from_p(p: float, K: float, Gamma: float):
     """Return (rho, rho_r) from pressure p (all in code units)."""
     if p <= 0.0:
@@ -60,8 +65,9 @@ def eos_from_p(p: float, K: float, Gamma: float):
     rho = rho_r + p / (Gamma - 1.0)
     return rho, rho_r
 
+
 # ============================
-# TOV + baryonic mass RHS (Part a + Part b)
+# TOV + baryonic mass RHS (Parts a + b)
 # State y = [m, nu, p, mP]
 # ============================
 def tov_rhs_with_mp(r: float, y: np.ndarray, K: float, Gamma: float) -> np.ndarray:
@@ -91,12 +97,14 @@ def tov_rhs_with_mp(r: float, y: np.ndarray, K: float, Gamma: float) -> np.ndarr
 
     return np.array([dm, dnu, dp, dmp])
 
+
 def rk4_step(f, r, y, h, K, Gamma):
     k1 = f(r, y, K, Gamma)
     k2 = f(r + 0.5*h, y + 0.5*h*k1, K, Gamma)
     k3 = f(r + 0.5*h, y + 0.5*h*k2, K, Gamma)
     k4 = f(r + h, y + h*k3, K, Gamma)
     return y + (h/6.0) * (k1 + 2*k2 + 2*k3 + k4)
+
 
 # ============================
 # Integrate one star given central pressure p_c (code units)
@@ -105,6 +113,7 @@ def rk4_step(f, r, y, h, K, Gamma):
 def integrate_star_pc(
     p_c: float,
     Gamma: float,
+    K_override: Optional[float] = None,
     r_max: float = 120.0,
     h_min: float = 1e-6,
     h_max: float = 5e-3,
@@ -113,7 +122,7 @@ def integrate_star_pc(
     Returns:
       (M_solar, R_km, MP_solar, Delta, rho_c_SI, status)
     """
-    K = K_from_reference(Gamma)
+    K = K_override if (K_override is not None) else K_from_reference(Gamma)
 
     if not np.isfinite(p_c) or p_c <= 0.0:
         return (np.nan, np.nan, np.nan, np.nan, np.nan, "nan")
@@ -180,19 +189,27 @@ def integrate_star_pc(
     Delta = (MP_solar - M_solar) / M_solar
     return (M_solar, R_km, MP_solar, Delta, rho_c_SI, "ok")
 
+
 # ============================
-# p_c sweep grid
+# p_c sweep grid (depends on K)
 # ============================
-def pc_sweep_grid(Gamma: float, n_points: int = 120, rho_factor_min: float = 1e-2, rho_factor_max: float = 1e6):
-    K = K_from_reference(Gamma)
+def pc_sweep_grid(
+    Gamma: float,
+    n_points: int = 120,
+    rho_factor_min: float = 1e-2,
+    rho_factor_max: float = 1e6,
+    K_override: Optional[float] = None,
+):
+    K = K_override if (K_override is not None) else K_from_reference(Gamma)
     rho_r_min = rho_r_ref_code * rho_factor_min
     rho_r_max = rho_r_ref_code * rho_factor_max
     p_min = K * (rho_r_min ** Gamma)
     p_max = K * (rho_r_max ** Gamma)
     return np.logspace(np.log10(p_min), np.log10(p_max), n_points)
 
-def sweep_models_for_gamma(Gamma: float, n_points: int = 120):
-    pc_grid = pc_sweep_grid(Gamma, n_points=n_points)
+
+def sweep_models_for_gamma(Gamma: float, n_points: int = 120, K_override: Optional[float] = None):
+    pc_grid = pc_sweep_grid(Gamma, n_points=n_points, K_override=K_override)
 
     R = np.full(n_points, np.nan)
     M = np.full(n_points, np.nan)
@@ -202,7 +219,7 @@ def sweep_models_for_gamma(Gamma: float, n_points: int = 120):
     status = np.array([""] * n_points, dtype=object)
 
     for i, pc in enumerate(pc_grid):
-        Mi, Ri, MPi, Di, rhoi, si = integrate_star_pc(pc, Gamma)
+        Mi, Ri, MPi, Di, rhoi, si = integrate_star_pc(pc, Gamma, K_override=K_override)
         M[i] = Mi
         R[i] = Ri
         MP[i] = MPi
@@ -210,16 +227,8 @@ def sweep_models_for_gamma(Gamma: float, n_points: int = 120):
         rho_c_SI[i] = rhoi
         status[i] = si
 
-    return {
-        "Gamma": Gamma,
-        "pc": pc_grid,
-        "R_km": R,
-        "M": M,
-        "MP": MP,
-        "Delta": Delta,
-        "rho_c_SI": rho_c_SI,
-        "status": status
-    }
+    return {"Gamma": Gamma, "pc": pc_grid, "R_km": R, "M": M, "MP": MP, "Delta": Delta, "rho_c_SI": rho_c_SI, "status": status}
+
 
 def split_stable_unstable_by_Mmax(res: dict):
     good = (res["status"] == "ok") & np.isfinite(res["M"]) & np.isfinite(res["rho_c_SI"]) & (res["rho_c_SI"] > 0)
@@ -239,6 +248,7 @@ def split_stable_unstable_by_Mmax(res: dict):
     unstable[idx[idx > i_max]] = True
     return good, stable, unstable, i_max
 
+
 def masked(arr, mask):
     out = np.array(arr, dtype=float)
     out[~mask] = np.nan
@@ -246,9 +256,67 @@ def masked(arr, mask):
 
 
 # ============================
+# Part (d) FAST: early-stop Mmax search
+# ============================
+def compute_Mmax_for_K_fast(Gamma: float, K_value: float, n_pc: int = 40, patience: int = 6) -> float:
+    """
+    Sweep p_c and stop once M has decreased 'patience' times in a row after reaching a peak.
+    Returns M_max for that (Gamma, K).
+    """
+    pc_grid = pc_sweep_grid(Gamma, n_points=n_pc, K_override=K_value)
+
+    M_best = -np.inf
+    dec_count = 0
+    seen_peak = False
+
+    for pc in pc_grid:
+        Mi, _, _, _, _, si = integrate_star_pc(pc, Gamma, K_override=K_value)
+        if si != "ok" or not np.isfinite(Mi):
+            continue
+
+        if Mi > M_best:
+            M_best = Mi
+            dec_count = 0
+            seen_peak = True
+        else:
+            if seen_peak:
+                dec_count += 1
+                if dec_count >= patience:
+                    break
+
+    if not np.isfinite(M_best) or M_best < 0:
+        return np.nan
+    return float(M_best)
+
+
+def allowed_K_range(
+    K_factors: np.ndarray,
+    Mmax_list: np.ndarray,
+    M_req: float,
+) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Returns (Kmin_factor, Kmax_factor) for which Mmax >= M_req.
+    If Mmax is monotonic increasing, this is basically K >= Kmin.
+    We return Kmax within scanned range (often just the max scanned factor).
+    """
+    ok = np.isfinite(Mmax_list)
+    allowed = ok & (Mmax_list >= M_req)
+    if not np.any(allowed):
+        return None, None
+
+    # Use the *smallest* K factor that satisfies the requirement.
+    kmin = float(np.min(K_factors[allowed]))
+
+    # "Allowed" upper limit is just what we scanned to; usually there is no upper bound from this constraint.
+    kmax = float(np.max(K_factors[allowed]))
+    return kmin, kmax
+
+
+# ============================
 def main():
     gammas = [1.3569, 2.7138]
 
+    # ===== Parts (a)-(c): reference K =====
     results = []
     for Gamma in gammas:
         results.append(sweep_models_for_gamma(Gamma, n_points=120))
@@ -257,7 +325,6 @@ def main():
     # Part (a): M-R curves
     # ----------------------------
     fig_a, axes_a = plt.subplots(1, 2, figsize=(12, 5), sharex=False, sharey=False)
-
     for ax, res in zip(axes_a, results):
         good = (res["status"] == "ok") & np.isfinite(res["R_km"]) & np.isfinite(res["M"])
         ax.plot(res["R_km"][good], res["M"][good], marker="o", linestyle="-", color="black",
@@ -266,7 +333,6 @@ def main():
         ax.set_ylabel("M ($M_\\odot$)")
         ax.grid(True)
         ax.legend()
-
     fig_a.suptitle("Neutron Star Mass–Radius Curves from TOV")
     fig_a.tight_layout()
     plt.show()
@@ -275,7 +341,6 @@ def main():
     # Part (b1): Delta vs R
     # ----------------------------
     fig_b1, axes_b1 = plt.subplots(1, 2, figsize=(12, 5), sharex=False, sharey=False)
-
     for ax, res in zip(axes_b1, results):
         good = (res["status"] == "ok") & np.isfinite(res["R_km"]) & np.isfinite(res["Delta"])
         ax.plot(res["R_km"][good], res["Delta"][good], marker="o", linestyle="-", color="black",
@@ -284,7 +349,6 @@ def main():
         ax.set_ylabel(r"$\Delta = (M_P - M)/M$")
         ax.grid(True)
         ax.legend()
-
     fig_b1.suptitle("Fractional Binding Energy vs Radius")
     fig_b1.tight_layout()
     plt.show()
@@ -293,7 +357,6 @@ def main():
     # Part (b2): M vs MP
     # ----------------------------
     fig_b2, axes_b2 = plt.subplots(1, 2, figsize=(12, 5), sharex=False, sharey=False)
-
     for ax, res in zip(axes_b2, results):
         good = (res["status"] == "ok") & np.isfinite(res["M"]) & np.isfinite(res["MP"])
         ax.plot(res["MP"][good], res["M"][good], marker="o", linestyle="-", color="black",
@@ -302,7 +365,6 @@ def main():
         ax.set_ylabel(r"$M$ ($M_\odot$)")
         ax.grid(True)
         ax.legend()
-
     fig_b2.suptitle("Gravitational Mass vs Baryonic Mass")
     fig_b2.tight_layout()
     plt.show()
@@ -311,37 +373,69 @@ def main():
     # Part (c): M vs rho_c (log x-axis)
     # ----------------------------
     fig_c, axes_c = plt.subplots(1, 2, figsize=(12, 5), sharex=False, sharey=False)
-
     for ax, res in zip(axes_c, results):
-        good, stable, unstable, i_max = split_stable_unstable_by_Mmax(res)
-
+        good, stable, unstable, _ = split_stable_unstable_by_Mmax(res)
         ax.set_xscale("log")
-
-        # no markers
         ax.plot(masked(res["rho_c_SI"], stable), masked(res["M"], stable),
                 linestyle="-", color="black", label="Stable")
         ax.plot(masked(res["rho_c_SI"], unstable), masked(res["M"], unstable),
                 linestyle="--", color="black", label="Unstable")
-
         ax.set_xlabel(r"$\rho_c$ (kg/m$^3$)")
         ax.set_ylabel(r"$M$ ($M_\odot$)")
-        ax.set_title(f"$\Gamma$ = {res['Gamma']}")
+        ax.set_title(f"$\\Gamma$ = {res['Gamma']}")
         ax.legend()
-
-        # Major grid only 
         ax.grid(True, which="major")
         ax.grid(False, which="minor")
-
-        if i_max is not None and np.isfinite(res["M"][i_max]):
-            print(
-                f"Gamma={res['Gamma']}: "
-                f"M_max = {res['M'][i_max]:.6g} M_sun at "
-                f"R = {res['R_km'][i_max]:.6g} km, "
-                f"rho_c = {res['rho_c_SI'][i_max]:.6g} kg/m^3"
-            )
-
     fig_c.suptitle(r"Stability from $dM/d\rho_c$ and the Maximum Mass")
     fig_c.tight_layout()
+    plt.show()
+
+    # ===== Part (d): Mmax(K) and allowed K range =====
+    M_req = 2.5  
+    fig_d, axes_d = plt.subplots(1, 2, figsize=(12, 5), sharex=False, sharey=False)
+
+    for ax, Gamma in zip(axes_d, gammas):
+        K_ref = K_from_reference(Gamma)
+
+        # Choose K scan range (multiples of K_ref)
+        if Gamma < 2.0:
+            K_factors = np.logspace(-2, 6, 15)
+        else:
+            K_factors = np.logspace(-2, 2, 15)
+
+        Mmax_list = np.full_like(K_factors, np.nan, dtype=float)
+
+        # Compute Mmax(K) quickly
+        for i, fac in enumerate(K_factors):
+            K_val = fac * K_ref
+            Mmax_list[i] = compute_Mmax_for_K_fast(Gamma, K_val, n_pc=40, patience=6)
+
+        # Allowed region from observational requirement
+        kmin, kmax = allowed_K_range(K_factors, Mmax_list, M_req=M_req)
+
+        # Plot
+        ax.set_xscale("log")
+        ax.plot(K_factors, Mmax_list, linestyle="-", color="black", label=r"$M_{\max}(K)$")
+        ax.axhline(M_req, linestyle="--", color="black", linewidth=1.0, label=rf"${M_req}\,M_\odot$")
+
+        if kmin is not None:
+            # Mark Kmin and shade allowed region within scanned range
+            ax.axvline(kmin, linestyle="--", color="black", linewidth=1.0)
+            ax.axvspan(kmin, K_factors.max(), alpha=0.12)
+
+            # Print a clean statement
+            print(f"Gamma={Gamma}: Allowed K/K_ref >= {kmin:.6g} (from M_max >= {M_req} M_sun)")
+        else:
+            print(f"Gamma={Gamma}: No K in scanned range satisfies M_max >= {M_req} M_sun (expand K range).")
+
+        ax.set_xlabel(r"$K/K_{\rm ref}$")
+        ax.set_ylabel(r"$M_{\max}$ ($M_\odot$)")
+        ax.set_title(f"$\\Gamma$ = {Gamma}")
+        ax.grid(True, which="major")
+        ax.legend()
+
+    fig_d.suptitle(r"Maximum NS Mass vs $K$ and the Allowed $K$ Range")
+    fig_d.tight_layout()
     plt.show()
 
 
